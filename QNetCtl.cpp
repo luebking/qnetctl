@@ -296,7 +296,9 @@ QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
 }
 
 #define WRITE_CMD(_S_, _C_)\
-if (!mySettings->_C_->text().isEmpty())\
+if (mySettings->_C_->text().isEmpty())\
+    s.remove(_S_);\
+else\
     s.setValue(_S_, mySettings->_C_->text())
 
 void QNetCtl::closeEvent(QCloseEvent *event)
@@ -312,7 +314,7 @@ void QNetCtl::closeEvent(QCloseEvent *event)
 
 #define READ_CMD(_S_, _D_, _C_)\
 cmd = s.value(_S_, _D_).toString();\
-if (!(cmd.isEmpty() || QFile::exists(cmd))) { \
+if (!(cmd.isEmpty() || QFile::exists(cmd.section(" ", 0, 0)))) { \
     qDebug() << "Warning: "_S_" does not exist, must be absolute path!" << cmd;\
     cmd.clear();\
 }\
@@ -806,7 +808,7 @@ void QNetCtl::expandCurrent()
 void QNetCtl::verifyPath()
 {
     QLineEdit *le = static_cast<QLineEdit*>(sender());
-    if (le->text().isEmpty() || QFile::exists(le->text()))
+    if (le->text().isEmpty() || QFile::exists(le->text().section(" ", 0, 0)))
         le->setPalette(QPalette());
     else {
         QPalette pal(le->palette());
