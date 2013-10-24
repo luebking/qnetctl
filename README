@@ -1,0 +1,23 @@
+QNetCtl is a Qt frontend for netctl, ip and iw
+
+It shows you avaialable network profiles, devices, wireless access points and ad hoc networks and
+allows you to create a (basic!) netctl profile for new available connections and switch between the
+profiles.
+
+The only build dependency is QtGui, runtime requirements are netctl, ip and -optionally- iw (for
+wireless connections)
+
+Biggest issue:
+--------------
+Many network operations require root permissions, that does esp. include wireless scanning.
+
+-> As resolution you'll either have to run qnetctl as root or provide a way to elevate permissions,
+eg. kdesu.
+
+Just, you really don't want to enter the root password every ten seconds to check for available
+access points.
+For now, it's up to you to decide whether you want to add NOPASSWD entries to the sudoers or polkit
+rules ... or enter the root password all the time ;-)
+
+If you wonder why networkmanager can do that:
+It dbus talks to a daemon, but you probably chose netctl for a good reason.
