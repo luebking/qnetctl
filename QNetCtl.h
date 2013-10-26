@@ -39,7 +39,7 @@ public:
     Type type;
     QString SSID, MAC, description, interface, profile, ipResolution, key;
     int quality;
-    bool active, adHoc;
+    bool active, adHoc, autoConnect;
 };
 
 namespace Ui {
@@ -71,18 +71,21 @@ private slots:
     void readProfiles();
     void scanWifi();
     void parseDevices();
+    void parseEnabledNetworks();
     void parseProfiles();
     void parseWifiDevs();
     void parseWifiScan();
     void showSelected(QTreeWidgetItem *, QTreeWidgetItem*);
     bool writeProfile(QTreeWidgetItem *item, QString key);
+    bool updateAutoConnects();
     void verifyPath();
 private:
     QTreeWidget *myNetworks;
     QPushButton *myConnectButton, *myForgetButton, *myEditButton;
     QList<Connection> myProfiles, myWLANs;
+    QStringList myEnabledProfiles;
     QMap<QString, bool> myDevices;
-    QTimer *myUpdateTimer, *myRescanTimer;
+    QTimer *myUpdateTimer, *myRescanTimer, *myAutoConnectUpdateTimer;
     int iWaitForIwScan;
     Ui::Settings *mySettings;
     Ui::IPConfig *myProfileConfig;

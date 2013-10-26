@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>377</width>
-    <height>209</height>
+    <height>236</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -118,6 +118,13 @@
       </size>
      </property>
     </spacer>
+   </item>
+   <item>
+    <widget class="QCheckBox" name="autoConnect">
+     <property name="text">
+      <string>Automatically connect to this network</string>
+     </property>
+    </widget>
    </item>
    <item>
     <widget class="QDialogButtonBox" name="buttonBox">

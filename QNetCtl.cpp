@@ -53,7 +53,8 @@ static QString gs_profilePath("/etc/netctl/");
 #define TOOL(_T_) mySettings->_T_->text()
 
 enum Roles { IsDetailRole = Qt::UserRole + 1, TypeRole, QualityRole, ConnectedRole, AdHocRole,
-             MacRole, ProfileRole, SsidRole, DescriptionRole, InterfaceRole, IPRole, KeyRole };
+             MacRole, ProfileRole, SsidRole, DescriptionRole, InterfaceRole, IPRole, KeyRole,
+             AutoconnectRole };
 
 Connection::Connection(const Connection &other)
 {
@@ -68,11 +69,13 @@ Connection::Connection(const Connection &other)
     adHoc        = other.adHoc;
     ipResolution = other.ipResolution;
     key          = other.key;
+    autoConnect  = other.autoConnect;
 }
 
 Connection::Connection(QString p)
 {
     profile = p;
+    autoConnect = true;
     type = Unknown;
     active = false;
     quality = 0;
@@ -123,6 +126,11 @@ Connection::Connection(QString p)
         } else if (line.startsWith("Gateway")) {
             if (ipResolution != "dhcp")
                 ipResolution.append(';' + line.section('=', 1).trimmed());
+        } else if (line.startsWith("ExcludeAuto")) {
+            autoConnect = line.section('=', 1).trimmed() != "yes";
+        } else if (line.startsWith("Priority")) {
+            // int = line.section('=', 1).trimmed().toInt();
+            void(0);
         }
     }
     file.close();
@@ -262,6 +270,11 @@ QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
     connect (myRescanTimer, SIGNAL(timeout()), SLOT(checkDevices()));
     myRescanTimer->start();
 
+    myAutoConnectUpdateTimer = new QTimer(this);
+    myAutoConnectUpdateTimer->setInterval(30000); // wait 30 seconds, it's just for reboots etc.
+    myAutoConnectUpdateTimer->setSingleShot(true);
+    connect (myAutoConnectUpdateTimer, SIGNAL(timeout()), SLOT(updateAutoConnects()));
+
     QWidget *w;
     QIcon icn = QIcon::fromTheme("preferences-system-network");
     addTab(w = new QWidget(this), icn, icn.isNull() ? tr("Networks") : QString());
@@ -302,6 +315,7 @@ QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
     connect (mySettings->rfkill, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
     connect (mySettings->leverage, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
 
+    query("systemctl list-unit-files", SLOT(parseEnabledNetworks()));
     readConfig();
     readProfiles();
     scanWifi();
@@ -321,6 +335,11 @@ void QNetCtl::closeEvent(QCloseEvent *event)
     WRITE_CMD("iw", iw);
     WRITE_CMD("rfkill", rfkill);
     WRITE_CMD("netctl", netctl);
+    if (myAutoConnectUpdateTimer->isActive()) {
+        myAutoConnectUpdateTimer->stop(); // shortcut
+        if (!updateAutoConnects())
+            return; // do not close, user shall fix his setup.
+    }
     QWidget::closeEvent(event);
 }
 
@@ -412,6 +431,28 @@ void QNetCtl::parseDevices()
     }
     if (checkWifi && !TOOL(iw).isEmpty()) {
         query(TOOL(iw) + " dev", SLOT(parseWifiDevs()));
+    }
+    updateTree();
+}
+
+void QNetCtl::parseEnabledNetworks()
+{
+    READ_STDOUT(services, "Failed to list systemd services");
+    QStringList serviceList = services.split('\n');
+    services.clear();
+    myEnabledProfiles.clear();
+    foreach (const QString &l, serviceList) {
+        QString line = l.trimmed();
+        if (line.startsWith("netctl") && line.endsWith("enabled")) {
+            if (line.startsWith("netctl-ifplugd@interface.service"))
+                myEnabledProfiles << "ifplugd.service"; // ".service" is illegal for netcfg
+            else if (line.startsWith("netctl-auto@interface.service"))
+                myEnabledProfiles << "auto.service";
+            else {
+                line = line.section('@', 1);
+                myEnabledProfiles << line.section(".service", 0, -2);
+            }
+        }
     }
     updateTree();
 }
@@ -524,6 +565,8 @@ bool QNetCtl::editProfile()
     }
 
     const int type = item->data(0, TypeRole).toInt();
+    bool autoConnect = item->data(0, AutoconnectRole).toBool();
+    myProfileConfig->autoConnect->setChecked(autoConnect);
     if (type < Connection::WEP) {
         myProfileConfig->key->hide();
         myProfileConfig->keyLabel->hide();
@@ -552,11 +595,17 @@ bool QNetCtl::editProfile()
             key.prepend('\\');
         QString profile = myProfileConfig->profile->text();
         item->setData(0, ProfileRole, profile);
+        if (autoConnect != myProfileConfig->autoConnect->isChecked()) {
+            autoConnect = true; // for update
+            item->setData(0, AutoconnectRole, myProfileConfig->autoConnect->isChecked());
+        }
         if (myProfileConfig->dhcp->isChecked())
             item->setData(0, IPRole, "dhcp");
         else
             item->setData(0, IPRole, myProfileConfig->ipv4->text() + ';' + myProfileConfig->gateway4->text());
         if (writeProfile(item, key)) {
+            if (autoConnect)
+                myAutoConnectUpdateTimer->start();
             readProfiles();
             return true;
         }
@@ -576,6 +625,7 @@ void QNetCtl::forgetProfile()
                                                          tr("Do you really want to delete the profile %1?").arg(profile),
                                                          QMessageBox::Yes|QMessageBox::No, QMessageBox::No);
     if (a == QMessageBox::Yes) {
+        QProcess::execute(TOOL(leverage) + " " + TOOL(netctl) + " disable " + profile);
         if (!QFile::remove(gs_profilePath + profile))
             QProcess::execute(TOOL(leverage) + " rm " + gs_profilePath + profile);
         readProfiles();
@@ -649,6 +699,9 @@ bool QNetCtl::writeProfile(QTreeWidgetItem *item, QString key)
             sec = "wep";
         else
             sec = "none";
+        if (!item->data(0, AutoconnectRole).toBool()) {
+            profile += "ExcludeAuto=true\n";
+        }
         profile +=  "Security=" + sec + '\n' +
                     "ESSID=" + DATA(Ssid) +
                     "AP=" + DATA(Mac) +// The BSSID (MAC address) of the access point to connect to.
@@ -696,6 +749,7 @@ static void map(const Connection &con, QTreeWidgetItem *net)
     net->setData(0, MacRole, con.MAC);
     net->setData(0, SsidRole, con.SSID);
     net->setData(0, KeyRole, con.key);
+    net->setData(0, AutoconnectRole, con.autoConnect);
 
     QString title = con.profile;
     if (title.isEmpty()) title = con.SSID;
@@ -791,6 +845,19 @@ void QNetCtl::buildTree()
         net->addChild(detail);
         myNetworks->addTopLevelItem(net);
     }
+
+    n = myNetworks->invisibleRootItem()->childCount(); // may have changed
+    bool enableIfPlugD = myEnabledProfiles.contains("ifplugd.service");
+    bool enableWpaActionD = myEnabledProfiles.contains("auto.service");
+    for (int i = 0; i < n; ++i) {
+        QTreeWidgetItem *item = myNetworks->invisibleRootItem()->child(i);
+        const int type = item->data(0, TypeRole).toInt();
+        if (enableWpaActionD && type > Connection::Ethernet)
+            continue; // controlled by profile attribute
+        const bool enabled = (enableIfPlugD && type == Connection::Ethernet) ||
+                             myEnabledProfiles.contains(item->data(0, ProfileRole).toString());
+        item->setData(0, AutoconnectRole, enabled);
+    }
 }
 
 void QNetCtl::showSelected(QTreeWidgetItem *item, QTreeWidgetItem *prev)
@@ -819,6 +886,91 @@ void QNetCtl::showSelected(QTreeWidgetItem *item, QTreeWidgetItem *prev)
 void QNetCtl::expandCurrent()
 {
     myNetworks->expandItem(currentItem());
+}
+
+bool QNetCtl::updateAutoConnects()
+{
+    // determine mode.
+    // if there's any wireless profile (usb wlan stick...), autoconnecting eth0 requires ifplugd
+    // to act as failover through netctl-ifplugd@interface.service
+    // if there's an autoconnecting wireless profile, we'll in addition require wpa_actiond for
+    // autoConnect netctl-auto@interface.service
+    // if there is only one autoconnecting eth0 profile, we just enable it and disable everything else
+    // if there're multiple autoconnecting eth0 profiles, that's for now (TODO: priority??) a conflict
+    bool haveWLAN(false), haveAutoWLAN(false);
+    QStringList autoEth0;
+    const int n = myNetworks->invisibleRootItem()->childCount();
+    for (int i = 0; i < n; ++i) {
+        QTreeWidgetItem *item = myNetworks->invisibleRootItem()->child(i);
+        const int type = item->data(0, TypeRole).toInt();
+        const bool autoConnect = item->data(0, AutoconnectRole).toBool();
+        const QString interface = item->data(0, InterfaceRole).toString();
+        if (type > Connection::Ethernet) {
+            haveWLAN = true;
+            haveAutoWLAN |= autoConnect;
+        } else if (autoConnect) {
+            autoEth0 << interface;
+        }
+    }
+
+    if (autoEth0.removeDuplicates()) {
+        QMessageBox::critical(this, tr("Conflictive setup"), tr("You requested to enable several "
+                                       "profiles on the same wired interface by default.<br>"
+                                       "Please select only one profile per wired interface to "
+                                       "automatically connect to.<br><br><b>No changes to autoconnection "
+                                       "will be applied unless!</b>"), QMessageBox::Cancel);
+        return false;
+    }
+
+    // verify that the mode can be used
+    const bool haveAutoEth0 = !autoEth0.isEmpty();
+    bool needIfPlugD(true), needWpaActionD(true);
+    while (needIfPlugD || needWpaActionD) {
+        if (haveAutoEth0 && haveWLAN)
+            needIfPlugD = !QFile::exists("/usr/bin/ifplugd"); // autoselect eth0 netctl-ifplugd@interface.service
+        if (haveAutoWLAN)
+            needWpaActionD = !QFile::exists("/usr/bin/wpa_actiond"); // wifi autoConnect netctl-auto@interface.service
+        if (needIfPlugD || needWpaActionD) {
+            QString message;
+            if (needIfPlugD) {
+                message = tr("You have chosen to automatically activate<br>a wired connection when it is "
+                             "available, but you lack<br>the package <b>ifplug</b> for this purpose.<br>"
+                             "Please install it or choose to activate all wired connections manually.");
+                if (needWpaActionD)
+                    message += "<br><br>";
+            }
+            if (needWpaActionD) {
+                message += tr("You have chosen to automatically activate<br>a wireless connection when it is "
+                              "available, but you lack<br>the package <b>wpa_actiond</b> for this purpose.<br>"
+                              "Please install it or choose to activate all wireless connections manually.");
+            }
+            if (QMessageBox::critical(this, tr("Please install required packages"), message,
+                                      QMessageBox::Abort|QMessageBox::Retry, QMessageBox::Retry) == QMessageBox::Abort) {
+                return false;
+            }
+        }
+    }
+
+    // now en/disable profiles
+    // disable all
+    for (int i = 0; i < n; ++i) {
+        const QString profile = myNetworks->invisibleRootItem()->child(i)->data(0, ProfileRole).toString();
+        QProcess::execute(TOOL(leverage) + " netctl disable " + profile);
+    }
+    if ((haveAutoEth0 && haveWLAN) || haveAutoWLAN) {
+        if (haveAutoEth0 && haveWLAN)
+            QProcess::execute(TOOL(leverage) + " systemctl enable netctl-ifplugd@interface.service");
+        if (haveAutoWLAN)
+            QProcess::execute(TOOL(leverage) + " systemctl enable netctl-auto@interface.service");
+    } else {
+        for (int i = 0; i < n; ++i) {
+            QTreeWidgetItem *item = myNetworks->invisibleRootItem()->child(i);
+            if (item->data(0, AutoconnectRole).toBool()) {
+                QProcess::execute(TOOL(leverage) + " netctl enable " + item->data(0, ProfileRole).toString());
+            }
+        }
+    }
+    return true;
 }
 
 void QNetCtl::verifyPath()
