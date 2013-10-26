@@ -164,15 +164,22 @@ public:
 
         QFont fnt = static_cast<QWidget*>(parent())->font();
         fnt.setBold(true);
-        if (!isDetails)
-            fnt.setPointSize(fnt.pointSize() * 1.2);
-        painter->setFont(fnt);
 
-        rect.adjust(isDetails ? 16 : 4, 0, -4, 0);
-
-        const int textFlags = Qt::AlignVCenter | Qt::TextSingleLine | Qt::TextShowMnemonic;
+        if (isDetails)
+            rect.adjust(16, 1, -4, -4);
+        else
+            rect.adjust(4, 0, -4, 0);
+        int textFlags = Qt::TextSingleLine | Qt::TextHideMnemonic;
         if (isDetails) {
-            painter->drawText(rect, textFlags | Qt::AlignLeft, index.data(MacRole).toString());
+            QString left = index.data(MacRole).toString();
+            if (left.isEmpty())
+                left = tr("Device: ") + index.data(InterfaceRole).toString();
+            else
+                left = index.data(InterfaceRole).toString() + " -> " + left;
+            painter->drawText(rect, textFlags | Qt::AlignLeft|Qt::AlignTop, left);
+            painter->drawText(rect, textFlags | Qt::AlignLeft|Qt::AlignBottom, "IP: " + index.data(IPRole).toString());
+            painter->drawText(rect, textFlags | Qt::AlignRight|Qt::AlignTop, index.data(SsidRole).toString());
+
             Connection::Type t = (Connection::Type)index.data(TypeRole).toInt();
             QString ps;
             QColor c = Qt::green;
@@ -204,19 +211,10 @@ public:
                     ps = "Security: WPA2";
                     break;
             }
+            painter->setFont(fnt);
             painter->setPen( mix(c, painter->pen().color()) );
-            painter->drawText(rect, textFlags | Qt::AlignRight, ps);
+            painter->drawText(rect, textFlags | Qt::AlignRight|Qt::AlignBottom, ps);
         } else {
-            QString name = QChar(index.data(AdHocRole).toBool() ? 0x21C4 : 0x2192) + QString(" ");
-            name += " " + index.data().toString();
-            if (index.data(ConnectedRole).toBool())
-                name = name + " " + QChar(0x26A1);
-            else if (!index.data(ProfileRole).toString().isEmpty())
-                name = name + " " + QChar(0x2714);
-            painter->drawText(rect, textFlags | Qt::AlignLeft, name);
-
-            painter->setFont(static_cast<QWidget*>(parent())->font());
-
             int quality = qMax(0, index.data(QualityRole).toInt());
             QString qualityString = QString::number(quality) + "%  ";
             int i = 0;
@@ -225,12 +223,25 @@ public:
             for (; i < 5; ++i)
                 qualityString += QChar(0x2606);
             painter->drawText(rect, textFlags | Qt::AlignRight, qualityString);
+
+            fnt.setPointSize(fnt.pointSize() * 1.2);
+            painter->setFont(fnt);
+            textFlags |= Qt::AlignVCenter;
+            QString name = QChar(index.data(AdHocRole).toBool() ? 0x21C4 : 0x2192) + QString(" ");
+            name += " " + index.data().toString();
+            if (index.data(ConnectedRole).toBool())
+                name = name + " " + QChar(0x26A1);
+            else if (!index.data(ProfileRole).toString().isEmpty())
+                name = name + " " + QChar(0x2714);
+            painter->drawText(rect, textFlags | Qt::AlignLeft, name);
         }
+        painter->setFont(static_cast<QWidget*>(parent())->font());
     }
 
     QSize sizeHint( const QStyleOptionViewItem &option, const QModelIndex &index ) const
     {
-        Q_UNUSED(index);
+        if (index.data(IsDetailRole).toBool())
+            return QSize(128, QFontMetrics(option.font).height() * 2 + 5);
         return QSize(128, QFontMetrics(option.font).height() * 3 / 2);
     }
 };
