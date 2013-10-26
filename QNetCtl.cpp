@@ -249,6 +249,7 @@ public:
 
 QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
 {
+    setWindowTitle("QNetCtl");
     myUpdateTimer = new QTimer(this);
     myUpdateTimer->setInterval(250);
     myUpdateTimer->setSingleShot(true);
@@ -507,6 +508,7 @@ bool QNetCtl::editProfile()
         myProfileConfig = new Ui::IPConfig;
     }
     myProfileConfig->setupUi(&dlg);
+    dlg.setWindowTitle(tr("Edit profile"));
     myProfileConfig->key->setFont(QFont("monospace"));
 //     myProfileConfig->key->setEchoMode(QLineEdit::Password);
     myProfileConfig->staticGroup->hide();
