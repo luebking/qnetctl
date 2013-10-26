@@ -802,14 +802,17 @@ void QNetCtl::showSelected(QTreeWidgetItem *item, QTreeWidgetItem *prev)
         myForgetButton->setEnabled(!item->data(0, ProfileRole).toString().isEmpty());
     }
     if (!item || !item->parent() || item->parent() == myNetworks->invisibleRootItem()) {
+        int delay = 0;
         if (prev) {
             if (!prev->isExpanded() && prev->parent() && prev->parent() != item)
                 prev = prev->parent();
-            if (prev->isExpanded())
+            if (prev->isExpanded()) {
+                delay = 250;
                 myNetworks->collapseItem(prev);
+            }
         }
         myNetworks->setCurrentItem(item);
-        QTimer::singleShot(250, this, SLOT(expandCurrent()));
+        QTimer::singleShot(delay, this, SLOT(expandCurrent()));
     }
 }
 
