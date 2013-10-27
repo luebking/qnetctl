@@ -461,8 +461,8 @@ void QNetCtl::parseWifiDevs() {
     READ_STDOUT(wireless, "Failed to list wireless devices");
     QStringList wirelessList = wireless.split('\n');
     wireless.clear();
-    foreach (QString line, wirelessList) {
-        line = line.trimmed();
+    foreach (const QString &l, wirelessList) {
+        const QString line = l.trimmed();
         if (line.startsWith("Interface")) {
             const QString interface = line.section(' ', 1);
             if (!myDevices.value(interface, false)) {
