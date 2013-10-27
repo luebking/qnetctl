@@ -675,7 +675,7 @@ bool QNetCtl::writeProfile(QTreeWidgetItem *item, QString key)
     const int type = item->data(0, TypeRole).toInt();
     const bool wireless = type > Connection::Ethernet;
 #define DATA(_S_) item->data(0, _S_##Role).toString() + '\n'
-    QString profile =   "Description=Written by QNetCtl\n"
+    QString profile =   "Description='Written by QNetCtl'\n"
                         "Connection=" + QString(wireless ? "wireless" : "ethernet") + '\n' +
                         "Interface=" + DATA(Interface);
     const QString ip = item->data(0, IPRole).toString();
