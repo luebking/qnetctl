@@ -330,6 +330,8 @@ else\
 void QNetCtl::closeEvent(QCloseEvent *event)
 {
     QSettings s("QNetCtl");
+    s.setValue("Width", width());
+    s.setValue("Height", height());
     WRITE_CMD("Leverage", leverage);
     WRITE_CMD("ip", ip);
     WRITE_CMD("iw", iw);
@@ -354,6 +356,9 @@ mySettings->_C_->setText(cmd)
 void QNetCtl::readConfig()
 {
     QSettings s("QNetCtl");
+    const int w = s.value("Width", 240).toInt();
+    const int h = s.value("Height", 5*w/4).toInt();
+    resize(w, h);
     QString cmd;
     READ_CMD("Leverage", QString(), leverage);
     READ_CMD("ip", "/usr/bin/ip", ip);
