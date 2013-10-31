@@ -485,6 +485,7 @@ void QNetCtl::scanWifi()
 {
     if (currentIndex() || iWaitForIwScan || TOOL(iw).isEmpty())
         return; // this can last depending on the wifi chip - don't trigger a new scan
+    // TODO: ensure ip link set <dev> up
     for (QMap<QString, bool>::const_iterator it = myDevices.constBegin(),
                                             end = myDevices.constEnd(); it != end; ++it) {
         if (*it) {
@@ -648,8 +649,10 @@ void QNetCtl::parseProfiles()
     READ_STDOUT(profiles, "Failed to list profiles:");
 
     QStringList profileList = profiles.split('\n', QString::SkipEmptyParts);
-    if (profileList.isEmpty())
+    if (profileList.isEmpty()) {
+        setEnabled(true);
         return;
+    }
     profiles.clear();
     myProfiles.clear();
     foreach (const QString &profile, profileList) {
