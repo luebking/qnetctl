@@ -310,13 +310,14 @@ QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
     mySettings = new Ui::Settings;
     mySettings->setupUi(w);
     connect (mySettings->netctl, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
+    connect (mySettings->systemctl, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
     connect (mySettings->ip, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
     connect (mySettings->iw, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
     connect (mySettings->rfkill, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
     connect (mySettings->leverage, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
 
-    query("systemctl list-unit-files", SLOT(parseEnabledNetworks()));
     readConfig();
+    query(TOOL(systemctl) + " list-units", SLOT(parseEnabledNetworks()));
     readProfiles();
     scanWifi();
 }
@@ -337,6 +338,7 @@ void QNetCtl::closeEvent(QCloseEvent *event)
     WRITE_CMD("iw", iw);
     WRITE_CMD("rfkill", rfkill);
     WRITE_CMD("netctl", netctl);
+    WRITE_CMD("systemctl", systemctl);
     if (myAutoConnectUpdateTimer->isActive()) {
         myAutoConnectUpdateTimer->stop(); // shortcut
         if (!updateAutoConnects())
@@ -365,6 +367,7 @@ void QNetCtl::readConfig()
     READ_CMD("iw", "/usr/bin/iw", iw);
     READ_CMD("rfkill", "/usr/bin/rfkill", rfkill);
     READ_CMD("netctl", "/usr/bin/netctl", netctl);
+    READ_CMD("systemctl", "/usr/bin/systemctl", systemctl);
 }
 
 void QNetCtl::query(QString cmd, const char *slot)
@@ -442,17 +445,17 @@ void QNetCtl::parseDevices()
 
 void QNetCtl::parseEnabledNetworks()
 {
+    static QRegExp  ifplugd_interface("netctl-ifplugd@.*\\.service"),
+                    auto_interface("netctl-auto@.*\\.service");
     READ_STDOUT(services, "Failed to list systemd services");
     QStringList serviceList = services.split('\n');
     services.clear();
     myEnabledProfiles.clear();
     foreach (const QString &l, serviceList) {
-        QString line = l.trimmed();
-        if (line.startsWith("netctl") && line.endsWith("enabled")) {
-            if (line.startsWith("netctl-ifplugd@interface.service"))
-                myEnabledProfiles << "ifplugd.service"; // ".service" is illegal for netcfg
-            else if (line.startsWith("netctl-auto@interface.service"))
-                myEnabledProfiles << "auto.service";
+        QString line = l.section(" loaded active ", 0, 0).trimmed();
+        if (line.startsWith("netctl") && line.endsWith(".service")) { // there're also the slices
+            if (!line.indexOf(ifplugd_interface) || !line.indexOf(auto_interface))
+                myEnabledProfiles << line; // ".service" is illegal for netcfg
             else {
                 line = line.section('@', 1);
                 myEnabledProfiles << line.section(".service", 0, -2);
@@ -855,14 +858,13 @@ void QNetCtl::buildTree()
     }
 
     n = myNetworks->invisibleRootItem()->childCount(); // may have changed
-    bool enableIfPlugD = myEnabledProfiles.contains("ifplugd.service");
-    bool enableWpaActionD = myEnabledProfiles.contains("auto.service");
     for (int i = 0; i < n; ++i) {
         QTreeWidgetItem *item = myNetworks->invisibleRootItem()->child(i);
         const int type = item->data(0, TypeRole).toInt();
-        if (enableWpaActionD && type > Connection::Ethernet)
+        const QString interface = item->data(0, InterfaceRole).toString();
+        if (type > Connection::Ethernet && myEnabledProfiles.contains("netctl-auto@" + interface + ".service"))
             continue; // controlled by profile attribute
-        const bool enabled = (enableIfPlugD && type == Connection::Ethernet) ||
+        const bool enabled = (type == Connection::Ethernet && myEnabledProfiles.contains("netctl-ifplugd@" + interface + ".service")) ||
                              myEnabledProfiles.contains(item->data(0, ProfileRole).toString());
         item->setData(0, AutoconnectRole, enabled);
     }
@@ -905,8 +907,8 @@ bool QNetCtl::updateAutoConnects()
     // autoConnect netctl-auto@interface.service
     // if there is only one autoconnecting eth0 profile, we just enable it and disable everything else
     // if there're multiple autoconnecting eth0 profiles, that's for now (TODO: priority??) a conflict
-    bool haveWLAN(false), haveAutoWLAN(false);
-    QStringList autoEth0;
+    bool haveWLAN(false);
+    QStringList autoEth0, autoWifi;
     const int n = myNetworks->invisibleRootItem()->childCount();
     for (int i = 0; i < n; ++i) {
         QTreeWidgetItem *item = myNetworks->invisibleRootItem()->child(i);
@@ -915,7 +917,8 @@ bool QNetCtl::updateAutoConnects()
         const QString interface = item->data(0, InterfaceRole).toString();
         if (type > Connection::Ethernet) {
             haveWLAN = true;
-            haveAutoWLAN |= autoConnect;
+            if (autoConnect && !autoWifi.contains(interface))
+                autoWifi << interface;
         } else if (autoConnect) {
             autoEth0 << interface;
         }
@@ -931,13 +934,18 @@ bool QNetCtl::updateAutoConnects()
     }
 
     // verify that the mode can be used
-    const bool haveAutoEth0 = !autoEth0.isEmpty();
+    const bool haveAutoEth0 = !autoEth0.isEmpty(),
+               haveAutoWLAN = !autoWifi.isEmpty();
     bool needIfPlugD(true), needWpaActionD(true);
     while (needIfPlugD || needWpaActionD) {
         if (haveAutoEth0 && haveWLAN)
             needIfPlugD = !QFile::exists("/usr/bin/ifplugd"); // autoselect eth0 netctl-ifplugd@interface.service
+        else
+            needIfPlugD = false;
         if (haveAutoWLAN)
             needWpaActionD = !QFile::exists("/usr/bin/wpa_actiond"); // wifi autoConnect netctl-auto@interface.service
+        else
+            needWpaActionD = false;
         if (needIfPlugD || needWpaActionD) {
             QString message;
             if (needIfPlugD) {
@@ -961,20 +969,30 @@ bool QNetCtl::updateAutoConnects()
 
     // now en/disable profiles
     // disable all
+    foreach (const QString &profile, myEnabledProfiles) {
+        if (profile.endsWith(".service")) // illegal, is for systemctl
+            QProcess::execute(TOOL(leverage) + " " + TOOL(systemctl) + " disable " + profile);
+        else
+            QProcess::execute(TOOL(leverage) + " " + TOOL(netctl) + " disable " + profile);
+    }
     for (int i = 0; i < n; ++i) {
         const QString profile = myNetworks->invisibleRootItem()->child(i)->data(0, ProfileRole).toString();
-        QProcess::execute(TOOL(leverage) + " netctl disable " + profile);
+        QProcess::execute(TOOL(leverage) + " " + TOOL(netctl) + " disable " + profile);
     }
     if ((haveAutoEth0 && haveWLAN) || haveAutoWLAN) {
-        if (haveAutoEth0 && haveWLAN)
-            QProcess::execute(TOOL(leverage) + " systemctl enable netctl-ifplugd@interface.service");
-        if (haveAutoWLAN)
-            QProcess::execute(TOOL(leverage) + " systemctl enable netctl-auto@interface.service");
-    } else {
+        if (haveAutoEth0 && haveWLAN) {
+            foreach (const QString &interface, autoEth0)
+                QProcess::execute(TOOL(leverage) + " " + TOOL(systemctl) + " enable netctl-ifplugd@" + interface + ".service");
+        }
+        if (haveAutoWLAN) {
+            foreach (const QString &interface, autoWifi)
+                QProcess::execute(TOOL(leverage) + " " + TOOL(systemctl) + " enable netctl-auto@" + interface + ".service");
+        }
+    } else { // simple eth0 setup
         for (int i = 0; i < n; ++i) {
             QTreeWidgetItem *item = myNetworks->invisibleRootItem()->child(i);
             if (item->data(0, AutoconnectRole).toBool()) {
-                QProcess::execute(TOOL(leverage) + " netctl enable " + item->data(0, ProfileRole).toString());
+                QProcess::execute(TOOL(leverage) + " " + TOOL(netctl) + " enable " + item->data(0, ProfileRole).toString());
             }
         }
     }
