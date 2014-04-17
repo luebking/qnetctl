@@ -53,6 +53,10 @@ class QNetCtl : public QTabWidget
 public:
     QNetCtl();
 //     ~QNetCtl();
+    void reply(QString tag, QString information);
+    void quitTool();
+signals:
+    void request(QString tag, QString info);
 protected:
     void closeEvent(QCloseEvent *event);
 private:
@@ -61,6 +65,7 @@ private:
     void query(QString cmd, const char *slot);
     void readConfig();
     void updateTree();
+    void writeProfile(QTreeWidgetItem *item, QString key);
 private slots:
     void buildTree();
     void checkDevices();
@@ -74,9 +79,8 @@ private slots:
     void parseEnabledNetworks();
     void parseProfiles();
     void parseWifiDevs();
-    void parseWifiScan();
+    void parseWifiScan(QString networks);
     void showSelected(QTreeWidgetItem *, QTreeWidgetItem*);
-    bool writeProfile(QTreeWidgetItem *item, QString key);
     bool updateAutoConnects();
     void verifyPath();
 private:

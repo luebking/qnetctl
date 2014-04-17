@@ -19,10 +19,13 @@
 ***************************************************************************/
 
 #include "QNetCtl.h"
+#include "QNetCtl_dbus.h"
 #include "ui_ipconfig.h"
 #include "ui_settings.h"
+
 #include <QAbstractItemDelegate>
 #include <QApplication>
+#include <QDBusConnection>
 #include <QDialog>
 #include <QDir>
 #include <QFile>
@@ -38,9 +41,10 @@
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
+#include <signal.h>
+
 #include <QtDebug>
 
-static QString gs_profilePath("/etc/netctl/");
 
 #define READ_STDOUT(_var_, _error_)\
     QProcess *proc = static_cast<QProcess*>(sender());\
@@ -50,7 +54,9 @@ static QString gs_profilePath("/etc/netctl/");
     }\
     QString _var_(QString::fromLocal8Bit(proc->readAllStandardOutput()))
 
-#define TOOL(_T_) mySettings->_T_->text()
+// #define TOOL(_T_) mySettings->_T_->text()
+
+#include "paths.h"
 
 enum Roles { IsDetailRole = Qt::UserRole + 1, TypeRole, QualityRole, ConnectedRole, AdHocRole,
              MacRole, ProfileRole, SsidRole, DescriptionRole, InterfaceRole, IPRole, KeyRole,
@@ -257,6 +263,11 @@ public:
 
 QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
 {
+    new QNetCtlAdaptor(this);
+    const QString service = "org.archlinux.qnetctl-" + QString::number(QCoreApplication::applicationPid());
+    QDBusConnection::sessionBus().registerService(service);
+    QDBusConnection::sessionBus().registerObject("/QNetCtl", this);
+
     setWindowTitle("QNetCtl");
     myUpdateTimer = new QTimer(this);
     myUpdateTimer->setInterval(250);
@@ -309,14 +320,13 @@ QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
     setTabToolTip(2, tr("Configuration"));
     mySettings = new Ui::Settings;
     mySettings->setupUi(w);
-    connect (mySettings->netctl, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
-    connect (mySettings->systemctl, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
-    connect (mySettings->ip, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
-    connect (mySettings->iw, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
-    connect (mySettings->rfkill, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
     connect (mySettings->leverage, SIGNAL(textChanged(const QString &)), SLOT(verifyPath()));
 
     readConfig();
+    QProcess *tool = new QProcess(this);
+    QString leverage = mySettings->leverage->text();
+    leverage.replace("%w", QString::number(winId())).replace("%p", QString::number(QCoreApplication::applicationPid()));
+    tool->start(leverage + " ./qnetctl_tool " + QString(getenv("DBUS_SESSION_BUS_ADDRESS")) + " " + QDBusConnection::sessionBus().name() + " " + service, QIODevice::NotOpen);
     query(TOOL(systemctl) + " list-units", SLOT(parseEnabledNetworks()));
     readProfiles();
     scanWifi();
@@ -334,16 +344,12 @@ void QNetCtl::closeEvent(QCloseEvent *event)
     s.setValue("Width", width());
     s.setValue("Height", height());
     WRITE_CMD("Leverage", leverage);
-    WRITE_CMD("ip", ip);
-    WRITE_CMD("iw", iw);
-    WRITE_CMD("rfkill", rfkill);
-    WRITE_CMD("netctl", netctl);
-    WRITE_CMD("systemctl", systemctl);
     if (myAutoConnectUpdateTimer->isActive()) {
         myAutoConnectUpdateTimer->stop(); // shortcut
         if (!updateAutoConnects())
             return; // do not close, user shall fix his setup.
     }
+    emit request("quit", "");
     QWidget::closeEvent(event);
 }
 
@@ -363,11 +369,6 @@ void QNetCtl::readConfig()
     resize(w, h);
     QString cmd;
     READ_CMD("Leverage", QString(), leverage);
-    READ_CMD("ip", "/usr/bin/ip", ip);
-    READ_CMD("iw", "/usr/bin/iw", iw);
-    READ_CMD("rfkill", "/usr/bin/rfkill", rfkill);
-    READ_CMD("netctl", "/usr/bin/netctl", netctl);
-    READ_CMD("systemctl", "/usr/bin/systemctl", systemctl);
 }
 
 void QNetCtl::query(QString cmd, const char *slot)
@@ -392,7 +393,7 @@ void QNetCtl::connectNetwork()
         return;
     }
     setEnabled(false);
-    query(TOOL(leverage) + " " + TOOL(netctl) + " switch-to " + profile, SLOT(readProfiles()));
+    emit request("switch_to_profile", profile);
 
 }
 
@@ -477,7 +478,7 @@ void QNetCtl::parseWifiDevs() {
                 myDevices[interface] = true;
                 ++iWaitForIwScan;
                 // query is ok, this is triggered from parseDevices only if iw exists
-                query(TOOL(leverage) + " " + TOOL(iw) + " dev " + interface + " scan", SLOT(parseWifiScan()));
+                emit request("scan_wifi", interface);
             }
         }
     }
@@ -493,20 +494,17 @@ void QNetCtl::scanWifi()
                                             end = myDevices.constEnd(); it != end; ++it) {
         if (*it) {
             ++iWaitForIwScan;
-            query(TOOL(leverage) + " " + TOOL(iw) + " dev " + it.key() + " scan", SLOT(parseWifiScan()));
+            emit request("scan_wifi", it.key());
         }
     }
 }
 
-void QNetCtl::parseWifiScan()
+void QNetCtl::parseWifiScan(QString networks)
 {
     --iWaitForIwScan;
     myNetworks->setEnabled(true);
 
-    READ_STDOUT(networks, "Failed to scan WIFI:");
-
     QStringList networkList = networks.split("\nBSS");
-    networks.clear();
 
     if (networkList.isEmpty())
         return;
@@ -612,12 +610,10 @@ bool QNetCtl::editProfile()
             item->setData(0, IPRole, "dhcp");
         else
             item->setData(0, IPRole, myProfileConfig->ipv4->text() + ';' + myProfileConfig->gateway4->text());
-        if (writeProfile(item, key)) {
-            if (autoConnect)
-                myAutoConnectUpdateTimer->start();
-            readProfiles();
-            return true;
-        }
+        writeProfile(item, key);
+        if (autoConnect)
+            myAutoConnectUpdateTimer->start();
+        return true;
     }
     return false;
 }
@@ -634,10 +630,7 @@ void QNetCtl::forgetProfile()
                                                          tr("Do you really want to delete the profile %1?").arg(profile),
                                                          QMessageBox::Yes|QMessageBox::No, QMessageBox::No);
     if (a == QMessageBox::Yes) {
-        QProcess::execute(TOOL(leverage) + " " + TOOL(netctl) + " disable " + profile);
-        if (!QFile::remove(gs_profilePath + profile))
-            QProcess::execute(TOOL(leverage) + " rm " + gs_profilePath + profile);
-        readProfiles();
+        emit request("remove_profile", profile);
     }
 }
 
@@ -645,6 +638,31 @@ void QNetCtl::readProfiles()
 {
     setEnabled(false);
     query("/usr/bin/netctl list", SLOT(parseProfiles()));
+}
+
+void QNetCtl::reply(QString tag, QString information)
+{
+    qDebug() << "reply" << tag << information;
+    if (information.startsWith("ERROR")) {
+        qDebug() << tag << information;
+    } else if (tag == "switch_to_profile") {
+        readProfiles();
+    } else if (tag == "scan_wifi") {
+        parseWifiScan(information);
+    } else if (tag == "enable_profile") {
+
+    } else if (tag == "enable_service") {
+
+    }
+    else if (tag == "disable_profile") {
+
+    } else if (tag == "disable_service") {
+
+    } else if (tag == "remove_profile") {
+        readProfiles();
+    } else if (tag == "write_profile") {
+        readProfiles();
+    }
 }
 
 void QNetCtl::parseProfiles()
@@ -671,7 +689,12 @@ void QNetCtl::parseProfiles()
     updateTree();
 }
 
-bool QNetCtl::writeProfile(QTreeWidgetItem *item, QString key)
+void QNetCtl::quitTool()
+{
+    emit request("quit", "");
+}
+
+void QNetCtl::writeProfile(QTreeWidgetItem *item, QString key)
 {
     QString name = item->data(0, ProfileRole).toString();
     if (name.isEmpty()) {
@@ -681,7 +704,6 @@ bool QNetCtl::writeProfile(QTreeWidgetItem *item, QString key)
         }
         name.prepend("qnetctl-");
     }
-    QFile file(gs_profilePath + name);
 
     const int type = item->data(0, TypeRole).toInt();
     const bool wireless = type > Connection::Ethernet;
@@ -721,23 +743,7 @@ bool QNetCtl::writeProfile(QTreeWidgetItem *item, QString key)
                     "AdHoc=" + QString(item->data(0, AdHocRole).toBool() ? "yes\n" : "no\n");
     }
 
-    if (file.open(QIODevice::WriteOnly|QIODevice::Text)) {
-        file.write(profile.toLocal8Bit());
-        file.close();
-    } else {
-        // likely write protected - we'll write to temp and ask for root permision to move it around
-        const QString profilePath(file.fileName());
-        file.setFileName(QDir::tempPath() + '/' + name);
-        if (file.open(QIODevice::WriteOnly|QIODevice::Text)) {
-            file.write(profile.toLocal8Bit());
-            file.close();
-            QProcess::execute(TOOL(leverage) + " mv " + file.fileName() + " " + profilePath);
-        } else {
-            QMessageBox::critical(this, tr("No write access"), tr("<h1>The profile cannot be written.</h1>Not even into the temp path.<br>Giving up, sorry."));
-            return false;
-        }
-    }
-    return true;
+    emit request("write_profile " + name, profile);
 }
 
 void QNetCtl::updateTree()
@@ -934,11 +940,11 @@ bool QNetCtl::updateAutoConnects()
     }
 
     // verify that the mode can be used
-    const bool haveAutoEth0 = !autoEth0.isEmpty(),
+    const bool haveAutoEth0 = haveWLAN && !autoEth0.isEmpty(),
                haveAutoWLAN = !autoWifi.isEmpty();
     bool needIfPlugD(true), needWpaActionD(true);
     while (needIfPlugD || needWpaActionD) {
-        if (haveAutoEth0 && haveWLAN)
+        if (haveAutoEth0)
             needIfPlugD = !QFile::exists("/usr/bin/ifplugd"); // autoselect eth0 netctl-ifplugd@interface.service
         else
             needIfPlugD = false;
@@ -968,34 +974,46 @@ bool QNetCtl::updateAutoConnects()
     }
 
     // now en/disable profiles
-    // disable all
-    foreach (const QString &profile, myEnabledProfiles) {
-        if (profile.endsWith(".service")) // illegal, is for systemctl
-            QProcess::execute(TOOL(leverage) + " " + TOOL(systemctl) + " disable " + profile);
-        else
-            QProcess::execute(TOOL(leverage) + " " + TOOL(netctl) + " disable " + profile);
-    }
-    for (int i = 0; i < n; ++i) {
-        const QString profile = myNetworks->invisibleRootItem()->child(i)->data(0, ProfileRole).toString();
-        QProcess::execute(TOOL(leverage) + " " + TOOL(netctl) + " disable " + profile);
-    }
-    if ((haveAutoEth0 && haveWLAN) || haveAutoWLAN) {
-        if (haveAutoEth0 && haveWLAN) {
-            foreach (const QString &interface, autoEth0)
-                QProcess::execute(TOOL(leverage) + " " + TOOL(systemctl) + " enable netctl-ifplugd@" + interface + ".service");
+    QStringList requiredProfiles;
+    if (haveAutoEth0 || haveAutoWLAN) {
+        if (haveAutoEth0) {
+            foreach (const QString &interface, autoEth0) {
+                const QString profile("netctl-ifplugd@" + interface + ".service");
+                requiredProfiles << profile;
+                myEnabledProfiles.removeAll(profile);
+            }
         }
         if (haveAutoWLAN) {
-            foreach (const QString &interface, autoWifi)
-                QProcess::execute(TOOL(leverage) + " " + TOOL(systemctl) + " enable netctl-auto@" + interface + ".service");
+            foreach (const QString &interface, autoWifi) {
+                const QString profile("netctl-auto@" + interface + ".service");
+                requiredProfiles << profile;
+                myEnabledProfiles.removeAll(profile);
+            }
         }
     } else { // simple eth0 setup
         for (int i = 0; i < n; ++i) {
             QTreeWidgetItem *item = myNetworks->invisibleRootItem()->child(i);
             if (item->data(0, AutoconnectRole).toBool()) {
-                QProcess::execute(TOOL(leverage) + " " + TOOL(netctl) + " enable " + item->data(0, ProfileRole).toString());
+                const QString profile(item->data(0, ProfileRole).toString());
+                requiredProfiles << profile;
+                myEnabledProfiles.removeAll(profile);
             }
         }
     }
+
+    // disable remaining enabled ones
+    foreach (const QString &profile, myEnabledProfiles) {
+        // profiles ending with .service are illegal and meant for systemctl
+        emit request(profile.endsWith(".service") ? "disable_service" : "disable_profile", profile);
+    }
+
+    myEnabledProfiles = requiredProfiles;
+    // enable required
+    foreach (const QString &profile, myEnabledProfiles) {
+        // profiles ending with .service are illegal and meant for systemctl
+        emit request(profile.endsWith(".service") ? "enable_service" : "enable_profile", profile);
+    }
+
     return true;
 }
 
@@ -1011,10 +1029,30 @@ void QNetCtl::verifyPath()
     }
 }
 
+static QNetCtl *gs_netCtl = 0;
+
+void signalHandler(int signal)
+{
+    if (!gs_netCtl)
+        return;
+    if (signal == SIGTERM || signal == SIGQUIT || signal == SIGINT) {
+        gs_netCtl->quitTool();
+        QApplication::quit();
+    } else if (signal == SIGSEGV || signal == SIGABRT) {
+        gs_netCtl->quitTool();
+    }
+}
+
 int main(int argc, char **argv)
 {
+    signal(SIGSEGV, signalHandler);
+    signal(SIGTERM, signalHandler);
+    signal(SIGQUIT, signalHandler);
+    signal(SIGINT, signalHandler);
+    signal(SIGABRT, signalHandler);
+
     QApplication a(argc, argv);
-    QNetCtl *netCtl = new QNetCtl;
-    netCtl->show();
+    gs_netCtl = new QNetCtl;
+    gs_netCtl->show();
     return a.exec();
 }
