@@ -326,8 +326,9 @@ QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
     QProcess *tool = new QProcess(this);
     QString leverage = mySettings->leverage->text();
     leverage.replace("%w", QString::number(winId())).replace("%p", QString::number(QCoreApplication::applicationPid()));
-    tool->start(leverage + " ./qnetctl_tool " + QString(getenv("DBUS_SESSION_BUS_ADDRESS")) + " " + QDBusConnection::sessionBus().name() + " " + service, QIODevice::NotOpen);
-    query(TOOL(systemctl) + " list-units", SLOT(parseEnabledNetworks()));
+    tool->start(leverage + " " + TOOL(qnetctl) + " " + QString(getenv("DBUS_SESSION_BUS_ADDRESS")) +
+                           " " + QDBusConnection::sessionBus().name() + " " + service, QIODevice::NotOpen);
+    query(TOOL(systemctl) + " list-unit-files", SLOT(parseEnabledNetworks()));
     readProfiles();
     scanWifi();
 }
@@ -453,7 +454,9 @@ void QNetCtl::parseEnabledNetworks()
     services.clear();
     myEnabledProfiles.clear();
     foreach (const QString &l, serviceList) {
-        QString line = l.section(" loaded active ", 0, 0).trimmed();
+        if (!l.trimmed().endsWith("enabled"))
+            continue;
+        QString line = l.section(" ", 0, 0);
         if (line.startsWith("netctl") && line.endsWith(".service")) { // there're also the slices
             if (!line.indexOf(ifplugd_interface) || !line.indexOf(auto_interface))
                 myEnabledProfiles << line; // ".service" is illegal for netcfg
@@ -561,7 +564,8 @@ bool QNetCtl::editProfile()
 //     myProfileConfig->key->setEchoMode(QLineEdit::Password);
     myProfileConfig->staticGroup->hide();
 
-    myProfileConfig->profile->setText(item->data(0, ProfileRole).toString());
+    QString oldProfileName = item->data(0, ProfileRole).toString();
+    myProfileConfig->profile->setText(oldProfileName);
 
     const QString ip = item->data(0, IPRole).toString();
     myProfileConfig->dhcp->setChecked(ip == "dhcp");
@@ -603,8 +607,19 @@ bool QNetCtl::editProfile()
         QString profile = myProfileConfig->profile->text();
         item->setData(0, ProfileRole, profile);
         if (autoConnect != myProfileConfig->autoConnect->isChecked()) {
+            autoConnect = myProfileConfig->autoConnect->isChecked();
+            item->setData(0, AutoconnectRole, autoConnect);
+            myEnabledProfiles.removeAll(profile);
+            myEnabledProfiles.removeAll(oldProfileName);
+            if (autoConnect) {
+                myEnabledProfiles << profile;
+                emit request("enable_profile", oldProfileName);
+                emit request("enable_profile", profile);
+            } else {
+                emit request("disable_profile", oldProfileName);
+                emit request("disable_profile", profile);
+            }
             autoConnect = true; // for update
-            item->setData(0, AutoconnectRole, myProfileConfig->autoConnect->isChecked());
         }
         if (myProfileConfig->dhcp->isChecked())
             item->setData(0, IPRole, "dhcp");
@@ -913,7 +928,6 @@ bool QNetCtl::updateAutoConnects()
     // autoConnect netctl-auto@interface.service
     // if there is only one autoconnecting eth0 profile, we just enable it and disable everything else
     // if there're multiple autoconnecting eth0 profiles, that's for now (TODO: priority??) a conflict
-    bool haveWLAN(false);
     QStringList autoEth0, autoWifi;
     const int n = myNetworks->invisibleRootItem()->childCount();
     for (int i = 0; i < n; ++i) {
@@ -922,7 +936,6 @@ bool QNetCtl::updateAutoConnects()
         const bool autoConnect = item->data(0, AutoconnectRole).toBool();
         const QString interface = item->data(0, InterfaceRole).toString();
         if (type > Connection::Ethernet) {
-            haveWLAN = true;
             if (autoConnect && !autoWifi.contains(interface))
                 autoWifi << interface;
         } else if (autoConnect) {
@@ -940,8 +953,8 @@ bool QNetCtl::updateAutoConnects()
     }
 
     // verify that the mode can be used
-    const bool haveAutoEth0 = haveWLAN && !autoEth0.isEmpty(),
-               haveAutoWLAN = !autoWifi.isEmpty();
+    bool haveAutoEth0 = !(autoWifi.isEmpty() || autoEth0.isEmpty()),
+         haveAutoWLAN = !autoWifi.isEmpty();
     bool needIfPlugD(true), needWpaActionD(true);
     while (needIfPlugD || needWpaActionD) {
         if (haveAutoEth0)
@@ -968,10 +981,18 @@ bool QNetCtl::updateAutoConnects()
             }
             if (QMessageBox::critical(this, tr("Please install required packages"), message,
                                       QMessageBox::Abort|QMessageBox::Retry, QMessageBox::Retry) == QMessageBox::Abort) {
+                QMessageBox::critical(this, tr("All automatic connections will be enabled unconditionally"),
+                                            tr("You have chosen to automatically activate multiple connections, "
+                                               "but lack the tools to select the best one automatically.<br>"
+                                               "Therefore <b>all connections will automatically be enabled simultaniously!</b><br>"
+                                               "Reconsider the setup"), QMessageBox::Ok);
                 return false;
             }
         }
     }
+
+    haveAutoEth0 |= !needIfPlugD;
+    haveAutoWLAN |= !needWpaActionD;
 
     // now en/disable profiles
     QStringList requiredProfiles;
