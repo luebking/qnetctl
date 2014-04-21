@@ -6,10 +6,17 @@
 #include <QFile>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QTimer>
 
 #include <unistd.h>
 
 #include "paths.h"
+
+static void debug(const QString s) {
+    QFile file("/tmp/qnetctl.dbg");
+    file.open(QIODevice::Append);
+    file.write(s.toLocal8Bit());
+}
 
 QNetCtlTool::QNetCtlTool(int &argc, char **argv) : QCoreApplication(argc, argv)
 {
@@ -21,9 +28,7 @@ QNetCtlTool::QNetCtlTool(int &argc, char **argv) : QCoreApplication(argc, argv)
     seteuid(1000);
     QDBusConnection bus = QDBusConnection::connectToBus(argv[1], argv[2]);
     seteuid(0);
-    QFile file("/tmp/qnetctl.dbg");
-    file.open(QIODevice::Append);
-    file.write(bus.isConnected() ? "connected" : "error!");
+
     myClient = new QDBusInterface(argv[3], "/QNetCtl", "org.archlinux.qnetctl", bus, this);
     bus.connect(argv[3], "/QNetCtl", "org.archlinux.qnetctl", "request", this, SLOT(request(QString, QString)));
 }
@@ -38,11 +43,14 @@ void QNetCtlTool::chain()
         myClient->call(QDBus::NoBlock, "reply", tag, QString("ERROR: %1, %2").arg(proc->exitStatus()).arg(proc->exitCode()));
         return;
     }
+    myClient->call(QDBus::NoBlock, "reply", tag, QString::fromLocal8Bit(proc->readAllStandardOutput()));
 
     QString cmd;
     if (tag == "remove_profile") {
         QFile::remove(gs_profilePath + info);
     } else if (tag == "scan_wifi") {
+        myScanningDevices.removeAll(info);
+        myUplinkingDevices.removeAll(info);
         cmd = TOOL(ip) + " link set " + info + " down";
     }
 
@@ -54,10 +62,61 @@ void QNetCtlTool::chain()
     env.remove("LANG");
     proc = new QProcess(this);
     proc->setProcessEnvironment(env);
-    proc->setProperty("QNetCtlTag", tag);
-    connect (proc, SIGNAL(finished(int, QProcess::ExitStatus)), SLOT(reply()));
+//     proc->setProperty("QNetCtlTag", tag);
+//     connect (proc, SIGNAL(finished(int, QProcess::ExitStatus)), SLOT(reply()));
     connect (proc, SIGNAL(finished(int, QProcess::ExitStatus)), proc, SLOT(deleteLater()));
     proc->start(cmd, QIODevice::ReadOnly);
+}
+
+void QNetCtlTool::scanWifi(QString device)
+{
+    if (device.isNull() && sender())
+        device = sender()->property("QNetCtlScanDevice").toString();
+
+    if (myScanningDevices.contains(device))
+        return;
+
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.remove("LC_ALL");
+    env.remove("LANG");
+    QProcess *proc = new QProcess(this);
+    proc->setProcessEnvironment(env);
+
+    bool isDown = false;
+    proc->start(TOOL(ip) + " link show " + device, QIODevice::ReadOnly);
+    proc->waitForFinished();
+    if (proc->exitStatus() == QProcess::NormalExit && !proc->exitCode())
+        isDown = !QString::fromLocal8Bit(proc->readAllStandardOutput()).section('>', 0, 0).contains("UP");
+
+    bool waitsForUp = myUplinkingDevices.contains(device);
+
+    if (isDown) {
+        if (!waitsForUp) {
+            waitsForUp = true;
+            myUplinkingDevices << device;
+            proc->start(TOOL(ip) + " link set " + device + " up", QIODevice::ReadOnly);
+            proc->waitForFinished();
+        }
+
+        // we're waiting for the device to come up
+        delete proc;
+        QTimer *t = new QTimer(this);
+        t->setProperty("QNetCtlScanDevice", device);
+        t->setSingleShot(true);
+        connect(t, SIGNAL(timeout()), this, SLOT(scanWifi()));
+        connect(t, SIGNAL(timeout()), t, SLOT(deleteLater()));
+        t->start(500);
+        return;
+    }
+
+    myScanningDevices << device;
+
+    proc->setProperty("QNetCtlTag", "scan_wifi");
+    proc->setProperty("QNetCtlInfo", device);
+    // if we set it up, we've to set it back down through the chain slot
+    connect(proc, SIGNAL(finished(int, QProcess::ExitStatus)), waitsForUp ? SLOT(chain()) : SLOT(reply()));
+    connect(proc, SIGNAL(finished(int, QProcess::ExitStatus)), proc, SLOT(deleteLater()));
+    proc->start(TOOL(iw) + " dev " + device + " scan");
 }
 
 void QNetCtlTool::reply()
@@ -78,22 +137,8 @@ void QNetCtlTool::request(const QString tag, const QString information)
     if (tag == "switch_to_profile") {
         cmd = TOOL(netctl) + " switch-to " + information;
     } else if (tag == "scan_wifi") {
-        bool wasDown = false;
-        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-        env.remove("LC_ALL");
-        env.remove("LANG");
-        QProcess proc2(this);
-        proc2.setProcessEnvironment(env);
-        proc2.start(TOOL(ip) + " link show " + information, QIODevice::ReadOnly);
-        proc2.waitForFinished();
-        if (proc2.exitStatus() == QProcess::NormalExit && !proc2.exitCode())
-            wasDown = QString::fromLocal8Bit(proc2.readAllStandardOutput()).contains("state DOWN");
-        if (wasDown) {
-            chain = true;
-            proc2.start(TOOL(ip) + " link set " + information + " up", QIODevice::ReadOnly);
-            proc2.waitForFinished();
-        }
-        cmd = TOOL(iw) + " dev " + information + " scan";
+        scanWifi(information);
+        return;
     } else if (tag == "enable_profile") {
         cmd = TOOL(netctl) + " enable " + information;
     } else if (tag == "enable_service") {
@@ -120,7 +165,7 @@ void QNetCtlTool::request(const QString tag, const QString information)
         }
         return; // no process to run
     } else if (tag == "reparse_config") {
-
+        return;
     } else if (tag == "quit") {
         quit();
         return;
@@ -128,6 +173,7 @@ void QNetCtlTool::request(const QString tag, const QString information)
 
     if (cmd.isNull()) {
         myClient->call(QDBus::NoBlock, "reply", tag, "ERROR: unsupported command / request:" + information);
+        return;
     }
 
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
