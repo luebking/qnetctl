@@ -657,7 +657,7 @@ void QNetCtl::readProfiles()
 
 void QNetCtl::reply(QString tag, QString information)
 {
-    qDebug() << "reply" << tag << information;
+//     qDebug() << "reply" << tag << information;
     if (information.startsWith("ERROR")) {
         qDebug() << tag << information;
     } else if (tag == "switch_to_profile") {
