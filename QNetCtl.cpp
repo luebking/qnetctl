@@ -312,6 +312,10 @@ QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
     connect (myConnectButton, SIGNAL(clicked()), SLOT(connectNetwork()));
     myConnectButton->setEnabled(false);
     hl->addWidget(myDisconnectButton = new QPushButton(tr("Disconnect"), w));
+    myDisconnectButton->ensurePolished();
+    QPalette pal = myDisconnectButton->palette();
+    pal.setColor(myDisconnectButton->foregroundRole(), Qt::red);
+    myDisconnectButton->setPalette(pal);
     connect (myDisconnectButton, SIGNAL(clicked()), SLOT(disconnectNetwork()));
     myDisconnectButton->setVisible(false);
     l->addLayout(hl);
