@@ -70,6 +70,7 @@ private slots:
     void buildTree();
     void checkDevices();
     void connectNetwork();
+    void disconnectNetwork();
     bool editProfile();
     void expandCurrent();
     void forgetProfile();
@@ -85,7 +86,7 @@ private slots:
     void verifyPath();
 private:
     QTreeWidget *myNetworks;
-    QPushButton *myConnectButton, *myForgetButton, *myEditButton;
+    QPushButton *myConnectButton, *myDisconnectButton, *myForgetButton, *myEditButton;
     QList<Connection> myProfiles, myWLANs;
     QStringList myEnabledProfiles;
     QMap<QString, bool> myDevices;

@@ -12,10 +12,10 @@
 
 #include "paths.h"
 
-static void debug(const QString s) {
+static void debug(QString s) {
     QFile file("/tmp/qnetctl.dbg");
     file.open(QIODevice::Append);
-    file.write(s.toLocal8Bit());
+    file.write(s.append("\n").toLocal8Bit());
 }
 
 QNetCtlTool::QNetCtlTool(int &argc, char **argv) : QCoreApplication(argc, argv)
@@ -134,8 +134,11 @@ void QNetCtlTool::request(const QString tag, const QString information)
 {
     QString cmd;
     bool chain = false;
+//     debug(tag + information);
     if (tag == "switch_to_profile") {
         cmd = TOOL(netctl) + " switch-to " + information;
+    } else if (tag == "stop_profile") {
+        cmd = TOOL(netctl) + " stop " + information;
     } else if (tag == "scan_wifi") {
         scanWifi(information);
         return;
@@ -189,6 +192,7 @@ void QNetCtlTool::request(const QString tag, const QString information)
         connect (proc, SIGNAL(finished(int, QProcess::ExitStatus)), SLOT(reply()));
     }
     connect (proc, SIGNAL(finished(int, QProcess::ExitStatus)), proc, SLOT(deleteLater()));
+//     debug(cmd);
     proc->start(cmd, QIODevice::ReadOnly);
 }
 

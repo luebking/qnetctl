@@ -310,6 +310,10 @@ QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
     connect (myEditButton, SIGNAL(clicked()), SLOT(editProfile()));
     hl->addWidget(myConnectButton = new QPushButton(tr("Connect"), w));
     connect (myConnectButton, SIGNAL(clicked()), SLOT(connectNetwork()));
+    myConnectButton->setEnabled(false);
+    hl->addWidget(myDisconnectButton = new QPushButton(tr("Disconnect"), w));
+    connect (myDisconnectButton, SIGNAL(clicked()), SLOT(disconnectNetwork()));
+    myDisconnectButton->setVisible(false);
     l->addLayout(hl);
 
 //     addTab(w = new QWidget(this), QIcon::fromTheme("network-wireless"), QString());
@@ -395,8 +399,21 @@ void QNetCtl::connectNetwork()
     }
     setEnabled(false);
     emit request("switch_to_profile", profile);
-
 }
+
+void QNetCtl::disconnectNetwork()
+{
+    QTreeWidgetItem *item = currentItem();
+    if (!item)
+        return;
+    QString profile = item->data(0, ProfileRole).toString();
+    if (profile.isEmpty() && !editProfile()) {
+        return;
+    }
+    setEnabled(false);
+    emit request("stop_profile", profile);
+}
+
 
 void QNetCtl::checkDevices()
 {
@@ -660,23 +677,20 @@ void QNetCtl::reply(QString tag, QString information)
 //     qDebug() << "reply" << tag << information;
     if (information.startsWith("ERROR")) {
         qDebug() << tag << information;
-    } else if (tag == "switch_to_profile") {
+    } else if (tag == "switch_to_profile" || tag == "stop_profile" ||
+               tag == "remove_profile" || tag == "write_profile") {
         readProfiles();
     } else if (tag == "scan_wifi") {
         parseWifiScan(information);
     } else if (tag == "enable_profile") {
-
+        // TODO?
     } else if (tag == "enable_service") {
-
+        // TODO?
     }
     else if (tag == "disable_profile") {
-
+        // TODO?
     } else if (tag == "disable_service") {
-
-    } else if (tag == "remove_profile") {
-        readProfiles();
-    } else if (tag == "write_profile") {
-        readProfiles();
+        // TODO?
     }
 }
 
@@ -896,7 +910,10 @@ void QNetCtl::showSelected(QTreeWidgetItem *item, QTreeWidgetItem *prev)
     if (item && item->isExpanded())
         return;
     if (item) {
-        myConnectButton->setEnabled(!item->data(0, ConnectedRole).toBool());
+        const bool connected = item->data(0, ConnectedRole).toBool();
+        myConnectButton->setVisible(!connected);
+        myConnectButton->setEnabled(!connected);
+        myDisconnectButton->setVisible(connected);
         myForgetButton->setEnabled(!item->data(0, ProfileRole).toString().isEmpty());
     }
     if (!item || !item->parent() || item->parent() == myNetworks->invisibleRootItem()) {
