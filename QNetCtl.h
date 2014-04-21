@@ -21,6 +21,7 @@
 #ifndef Q_NET_CTL_H
 #define Q_NET_CTL_H
 
+class ErrorLabel;
 class QPushButton;
 class QTimer;
 class QTreeWidget;
@@ -86,6 +87,7 @@ private slots:
     void verifyPath();
 private:
     QTreeWidget *myNetworks;
+    ErrorLabel *myErrorLabel;
     QPushButton *myConnectButton, *myDisconnectButton, *myForgetButton, *myEditButton;
     QList<Connection> myProfiles, myWLANs;
     QStringList myEnabledProfiles;

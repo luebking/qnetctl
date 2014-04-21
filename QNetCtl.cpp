@@ -32,6 +32,7 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QProcess>
 #include <QPushButton>
@@ -45,6 +46,27 @@
 
 #include <QtDebug>
 
+
+class ErrorLabel : public QLabel
+{
+public:
+    ErrorLabel(QWidget *parent) : QLabel(parent) {
+        ensurePolished();
+        QFont fnt = font();
+        fnt.setBold(true);
+        setFont(fnt);
+        QPalette pal = palette();
+        pal.setColor(foregroundRole(), Qt::red);
+        setPalette(pal);
+    }
+protected:
+    void mousePressEvent(QMouseEvent *me) {
+        if (me->button() == Qt::LeftButton) {
+            setText(QString());
+            hide();
+        }
+    }
+};
 
 #define READ_STDOUT(_var_, _error_)\
     QProcess *proc = static_cast<QProcess*>(sender());\
@@ -303,6 +325,10 @@ QNetCtl::QNetCtl() : QTabWidget(), iWaitForIwScan(0), myProfileConfig(0)
     myNetworks->setVerticalScrollMode( QAbstractItemView::ScrollPerPixel );
     myNetworks->setAnimated( true );
     myNetworks->setItemDelegate(new NetworkDelegate(myNetworks));
+
+    l->addWidget(myErrorLabel = new ErrorLabel(w));
+    myErrorLabel->hide();
+
     QHBoxLayout *hl = new QHBoxLayout;
     hl->addWidget(myForgetButton = new QPushButton(tr("Forget"), w));
     connect (myForgetButton, SIGNAL(clicked()), SLOT(forgetProfile()));
@@ -415,6 +441,7 @@ void QNetCtl::disconnectNetwork()
         return;
     }
     setEnabled(false);
+//     qDebug() << "stop_profile" << profile;
     emit request("stop_profile", profile);
 }
 
@@ -680,7 +707,8 @@ void QNetCtl::reply(QString tag, QString information)
 {
 //     qDebug() << "reply" << tag << information;
     if (information.startsWith("ERROR")) {
-        qDebug() << tag << information;
+        myErrorLabel->setText(tag + " | " + information);
+        myErrorLabel->show();
     } else if (tag == "switch_to_profile" || tag == "stop_profile" ||
                tag == "remove_profile" || tag == "write_profile") {
         readProfiles();
