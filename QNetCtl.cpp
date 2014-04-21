@@ -652,7 +652,7 @@ void QNetCtl::forgetProfile()
 void QNetCtl::readProfiles()
 {
     setEnabled(false);
-    query("/usr/bin/netctl list", SLOT(parseProfiles()));
+    query(TOOL(netctl) + " list", SLOT(parseProfiles()));
 }
 
 void QNetCtl::reply(QString tag, QString information)
