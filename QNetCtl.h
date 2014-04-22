@@ -84,6 +84,7 @@ private slots:
     void parseWifiScan(QString networks);
     void showSelected(QTreeWidgetItem *, QTreeWidgetItem*);
     bool updateAutoConnects();
+    void updateConnectButton();
     void verifyPath();
 private:
     QTreeWidget *myNetworks;

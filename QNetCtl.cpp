@@ -748,6 +748,7 @@ void QNetCtl::parseProfiles()
     setEnabled(true);
     checkDevices();
     updateTree();
+    QTimer::singleShot(300, this, SLOT(updateConnectButton()));
 }
 
 void QNetCtl::quitTool()
@@ -941,13 +942,7 @@ void QNetCtl::showSelected(QTreeWidgetItem *item, QTreeWidgetItem *prev)
 {
     if (item && item->isExpanded())
         return;
-    if (item) {
-        const bool connected = item->data(0, ConnectedRole).toBool();
-        myConnectButton->setVisible(!connected);
-        myConnectButton->setEnabled(!connected);
-        myDisconnectButton->setVisible(connected);
-        myForgetButton->setEnabled(!item->data(0, ProfileRole).toString().isEmpty());
-    }
+    updateConnectButton();
     if (!item || !item->parent() || item->parent() == myNetworks->invisibleRootItem()) {
         int delay = 0;
         if (prev) {
@@ -1085,6 +1080,19 @@ bool QNetCtl::updateAutoConnects()
     }
 
     return true;
+}
+
+void QNetCtl::updateConnectButton() {
+    if (QTreeWidgetItem *item = currentItem()) {
+        const bool active = item->data(0, ConnectedRole).toBool();
+        myConnectButton->setEnabled(true);
+        myConnectButton->setVisible(!active);
+        myDisconnectButton->setVisible(active);
+    } else {
+        myDisconnectButton->hide();
+        myConnectButton->show();
+        myConnectButton->setEnabled(false);
+    }
 }
 
 void QNetCtl::verifyPath()
